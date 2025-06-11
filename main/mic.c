@@ -1,28 +1,22 @@
 #include "mic.h"
-#include <string.h>
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "driver/i2s.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "esp_spp_api.h"
+#include "freertos/task.h"
+#include "freertos/FreeRTOS.h"
 
 #define SPP_TAG "MIC"
 #define I2S_PORT I2S_NUM_0
-#define I2S_WS GPIO_NUM_25
-#define I2S_SCK GPIO_NUM_26
-#define I2S_SD GPIO_NUM_27
+#define I2S_WS GPIO_NUM_2
+#define I2S_SCK GPIO_NUM_0
+#define I2S_SD GPIO_NUM_15
 #define BUFFER_LEN 512
 #define SAMPLE_RATE 8000
 #define REAL_BYTES_X_SAMPLE 4
 #define CIRCULAR_BUFFER_SIZE 65536
-#define BUTTON_GPIO GPIO_NUM_34
-#define LED_GPIO GPIO_NUM_32
-
-extern void mic_to_speaker_switch();
-
-static int ganancia = 13;
-static int congestiones = 0;
+#define BUTTON_GPIO GPIO_NUM_26
+#define LED_GPIO GPIO_NUM_27
 
 static uint8_t circular_buffer[CIRCULAR_BUFFER_SIZE];
 static volatile size_t write_index = 0;
@@ -30,8 +24,8 @@ static volatile size_t read_index = 0;
 static volatile size_t data_available = 0;
 
 static uint32_t spp_client_handle = 0;
-volatile bool spp_can_send = true;
-volatile bool recording = false;
+static volatile bool spp_can_send = true;
+static volatile bool recording = false;
 
 static uint8_t pending_buffer[1024];
 static size_t pending_len = 0;
@@ -39,6 +33,30 @@ static size_t pending_len = 0;
 static TaskHandle_t i2s_task_handle = NULL;
 static TaskHandle_t button_task_handle = NULL;
 static TaskHandle_t sender_task_handle = NULL;
+
+// FSM callback
+static mic_event_cb_t mode_switch_callback = NULL;
+
+//====================== Helper =========================
+
+void mic_register_mode_switch_callback(mic_event_cb_t cb)
+{
+    ESP_LOGI(SPP_TAG,"INSIDE MIC REGISTER MODE SWITCH CALLBACK");
+    mode_switch_callback = cb;
+}
+
+void mic_set_recording(bool enable)
+{
+    recording = enable;
+    gpio_set_level(LED_GPIO, enable ? 1 : 0);
+}
+
+void mic_set_client_handle(uint32_t handle)
+{
+    spp_client_handle = handle;
+}
+
+//====================== I2S INIT =========================
 
 void i2s_config_init()
 {
@@ -59,14 +77,12 @@ void i2s_config_init()
         .data_out_num = I2S_PIN_NO_CHANGE,
         .data_in_num = I2S_SD};
 
-    esp_err_t err = i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
-    if (err != ESP_OK) return;
-
-    err = i2s_set_pin(I2S_PORT, &pin_config);
-    if (err != ESP_OK) return;
-
+    ESP_ERROR_CHECK(i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL));
+    ESP_ERROR_CHECK(i2s_set_pin(I2S_PORT, &pin_config));
     i2s_zero_dma_buffer(I2S_PORT);
 }
+
+//====================== BUFFER =========================
 
 void circular_buffer_write(uint8_t *data, size_t length)
 {
@@ -94,19 +110,18 @@ size_t circular_buffer_read(uint8_t *data, size_t length)
     return bytes_read;
 }
 
+//====================== TASKS =========================
+
 void bluetooth_sender_task(void *arg)
 {
     while (1)
     {
-        if (gpio_get_level(BUTTON_GPIO) == 1 &&
-            spp_can_send &&
-            spp_client_handle != 0 &&
-            pending_len == 0)
+        if (recording && spp_can_send && spp_client_handle != 0 && pending_len == 0)
         {
             size_t bytes = circular_buffer_read(pending_buffer, sizeof(pending_buffer));
             if (bytes > 0)
             {
-                pending_len = bytes;
+                        pending_len = bytes;
                 spp_can_send = false;
                 esp_err_t err = esp_spp_write(spp_client_handle, pending_len, pending_buffer);
                 if (err != ESP_OK)
@@ -119,11 +134,13 @@ void bluetooth_sender_task(void *arg)
     }
 }
 
+
 void i2s_reader_task(void *arg)
 {
     uint8_t temp_buffer[REAL_BYTES_X_SAMPLE * BUFFER_LEN];
     int16_t processed_samples[BUFFER_LEN];
     size_t bytes_read;
+    int ganancia = 13;
 
     while (1)
     {
@@ -132,6 +149,7 @@ void i2s_reader_task(void *arg)
         {
             size_t samples_read = bytes_read / 4;
             int32_t *samples_32bit = (int32_t *)temp_buffer;
+
             for (size_t i = 0; i < samples_read; i++)
             {
                 processed_samples[i] = samples_32bit[i] >> ganancia;
@@ -144,6 +162,7 @@ void i2s_reader_task(void *arg)
         }
     }
 }
+
 
 void button_task(void *arg)
 {
@@ -165,15 +184,16 @@ void button_task(void *arg)
             {
                 if (current_state && !recording)
                 {
-                    gpio_set_level(LED_GPIO, 1);
-                    recording = true;
+                    mic_set_recording(true);
                 }
                 else if (!current_state && recording)
                 {
-                    gpio_set_level(LED_GPIO, 0);
-                    recording = false;
-                    mic_to_speaker_switch();
-                    vTaskDelete(NULL);
+                    mic_set_recording(false);
+                    if (mode_switch_callback)
+                    {
+                        ESP_LOGI(SPP_TAG,"SWITCH CALLBACK ACTIVADO");
+                        mode_switch_callback();
+                    }
                 }
                 stable_counter++;
             }
@@ -188,35 +208,62 @@ void button_task(void *arg)
     }
 }
 
-void mic_start_tasks()
+//====================== PUBLIC API =========================
+
+void mic_start()
 {
     gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
     gpio_set_direction(BUTTON_GPIO, GPIO_MODE_INPUT);
+    mic_set_recording(false);
+
     i2s_config_init();
 
-    xTaskCreate(button_task, "button_task", 8192, NULL, 5, &button_task_handle);
+    xTaskCreate(button_task, "button_task", 4096, NULL, 5, &button_task_handle);
     xTaskCreate(i2s_reader_task, "i2s_reader_task", 8192, NULL, 6, &i2s_task_handle);
     xTaskCreate(bluetooth_sender_task, "bluetooth_sender_task", 4096, NULL, 6, &sender_task_handle);
+
+    ESP_LOGI(SPP_TAG, "MIC STARTED");
 }
 
-void mic_stop_tasks()
+void mic_stop()
 {
-    if (i2s_task_handle) {
+    ESP_LOGI(SPP_TAG, "MICROFONO DETENIDO INICIAL");
+
+    if (i2s_task_handle)
+    {
+        ESP_LOGI(SPP_TAG, "Eliminando i2s_task_handle");
         vTaskDelete(i2s_task_handle);
         i2s_task_handle = NULL;
     }
-    if (button_task_handle) {
+
+    if (button_task_handle)
+    {
+        ESP_LOGI(SPP_TAG, "Eliminando button_task_handle");
         vTaskDelete(button_task_handle);
         button_task_handle = NULL;
     }
-    if (sender_task_handle) {
+
+    if (sender_task_handle)
+    {
+        ESP_LOGI(SPP_TAG, "Eliminando sender_task_handle");
         vTaskDelete(sender_task_handle);
         sender_task_handle = NULL;
     }
 
+    ESP_LOGI(SPP_TAG, "Desinstalando I2S driver");
     i2s_driver_uninstall(I2S_PORT);
+    ESP_LOGI(SPP_TAG, "I2S driver desinstalado");
+
     recording = false;
+    spp_can_send = true;
+    pending_len = 0;
+    write_index = 0;
+    read_index = 0;
+    data_available = 0;
+
+    ESP_LOGI(SPP_TAG, "MICROFONO DETENIDO FINAL");
 }
+
 
 void mic_spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
 {
@@ -225,13 +272,6 @@ void mic_spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
     case ESP_SPP_WRITE_EVT:
         spp_can_send = true;
         pending_len = 0;
-
-        if (!recording)
-        {
-            write_index = 0;
-            read_index = 0;
-            data_available = 0;
-        }
         break;
 
     case ESP_SPP_SRV_OPEN_EVT:
@@ -240,10 +280,6 @@ void mic_spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
 
     case ESP_SPP_CONG_EVT:
         spp_can_send = !param->cong.cong;
-        if (param->cong.cong == 1 && recording)
-        {
-            congestiones += 1;
-        }
         break;
 
     default:

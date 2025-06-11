@@ -5,7 +5,6 @@
 #include "esp_gap_bt_api.h"
 #include "esp_spp_api.h"
 #include "nvs_flash.h"
-#include "esp_mac.h"
 
 #include "mic.h"
 #include "speaker.h"
@@ -13,7 +12,8 @@
 #define SPP_TAG "MAIN"
 #define SPP_SERVER_NAME "SPP_SERVER"
 
-typedef enum {
+typedef enum
+{
     MODE_WAITING,
     MODE_MIC,
     MODE_SPEAKER
@@ -23,7 +23,52 @@ static system_mode_t current_mode = MODE_WAITING;
 static uint32_t client_handle = 0;
 static bool spp_ready = false;
 
-// Router general del SPP
+// ===================== CAMBIO DE MODO =========================
+
+void set_mode(system_mode_t new_mode)
+{
+    if (current_mode == new_mode)
+        return;
+
+    switch (new_mode)
+    {
+    case MODE_MIC:
+        ESP_LOGI(SPP_TAG, "Switched to MIC mode");
+        speaker_stop(); // Asegura detención speaker
+        mic_start();    // Nuevo nombre refactorizado
+        break;
+
+    case MODE_SPEAKER:
+        ESP_LOGI(SPP_TAG, "Switched to SPEAKER mode");
+        mic_stop();      // Detiene tareas de micrófono
+        speaker_start(); // Inicializa speaker
+        break;
+
+    default:
+        break;
+    }
+
+    current_mode = new_mode;
+}
+
+// ===================== CALLBACKS REGISTRADOS =========================
+
+void mic_finished_callback()
+{
+    ESP_LOGI(SPP_TAG, "Callback mic_finished_callback()");
+    set_mode(MODE_SPEAKER);
+}
+
+void speaker_idle_callback()
+{
+    if (spp_ready)
+    {
+        set_mode(MODE_MIC);
+    }
+}
+
+// ===================== CALLBACK SPP =========================
+
 void spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
 {
     switch (event)
@@ -34,24 +79,34 @@ void spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
         break;
 
     case ESP_SPP_SRV_OPEN_EVT:
-        ESP_LOGI(SPP_TAG, "Client connected");
         client_handle = param->srv_open.handle;
+        mic_set_client_handle(param->srv_open.handle);
         spp_ready = true;
-        current_mode = MODE_MIC;
-        mic_start_tasks();
+
+        set_mode(MODE_MIC); // Se establece el modo MIC por defecto
         break;
 
     case ESP_SPP_WRITE_EVT:
     case ESP_SPP_CONG_EVT:
-        if (current_mode == MODE_MIC) {
+        if (current_mode == MODE_MIC)
+        {
             mic_spp_callback(event, param);
         }
         break;
 
     case ESP_SPP_DATA_IND_EVT:
-        if (current_mode == MODE_SPEAKER) {
+        if (current_mode == MODE_SPEAKER)
+        {
             speaker_spp_callback(event, param);
         }
+        break;
+
+    case ESP_SPP_CLOSE_EVT:
+        ESP_LOGI(SPP_TAG, "Client disconnected");
+        spp_ready = false;
+        client_handle = 0;
+        mic_stop();       
+        set_mode(MODE_WAITING);
         break;
 
     default:
@@ -60,27 +115,11 @@ void spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
     }
 }
 
-// Función llamada cuando se detecta fin de grabación
-void mic_to_speaker_switch()
-{
-    mic_stop_tasks();
-    current_mode = MODE_SPEAKER;
-    speaker_start();
-    ESP_LOGI(SPP_TAG, "Switched to SPEAKER mode");
-}
-
-// Función llamada por el speaker cuando detecta silencio prolongado
-void speaker_to_mic_switch()
-{
-    if (spp_ready) {
-        current_mode = MODE_MIC;
-        mic_start_tasks();
-        ESP_LOGI(SPP_TAG, "Switched back to MIC mode");
-    }
-}
+// ===================== MAIN =========================
 
 void app_main(void)
 {
+    // Inicialización de NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
@@ -102,6 +141,10 @@ void app_main(void)
 
     esp_bt_gap_set_device_name("ESP32_RING_AI");
     esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+
+    mic_register_mode_switch_callback(mic_finished_callback);
+    ESP_LOGI("MAIN", "Callback mic_finished_callback registrado");
+    speaker_register_mode_switch_callback(speaker_idle_callback);
 
     ESP_LOGI(SPP_TAG, "Device initialized, waiting for connection...");
 }
