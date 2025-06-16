@@ -29,6 +29,8 @@ void set_mode(system_mode_t new_mode)
 {
     if (current_mode == new_mode)
         return;
+    
+    printf("Nuevo modo: %u", new_mode);
 
     switch (new_mode)
     {
@@ -41,7 +43,9 @@ void set_mode(system_mode_t new_mode)
     case MODE_SPEAKER:
         ESP_LOGI(SPP_TAG, "Switched to SPEAKER mode");
         mic_stop();      // Detiene tareas de micrófono
+        ESP_LOGI(SPP_TAG, "Mic Stopped");
         speaker_start(); // Inicializa speaker
+        ESP_LOGI(SPP_TAG, "Mode Speaker Ready");
         break;
 
     default:
@@ -55,7 +59,6 @@ void set_mode(system_mode_t new_mode)
 
 void mic_finished_callback()
 {
-    ESP_LOGI(SPP_TAG, "Callback mic_finished_callback()");
     set_mode(MODE_SPEAKER);
 }
 
@@ -74,7 +77,6 @@ void spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
     switch (event)
     {
     case ESP_SPP_INIT_EVT:
-        ESP_LOGI(SPP_TAG, "SPP init, starting service");
         esp_spp_start_srv(ESP_SPP_SEC_NONE, ESP_SPP_ROLE_SLAVE, 0, SPP_SERVER_NAME);
         break;
 
@@ -143,8 +145,6 @@ void app_main(void)
     esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
 
     mic_register_mode_switch_callback(mic_finished_callback);
-    ESP_LOGI("MAIN", "Callback mic_finished_callback registrado");
     speaker_register_mode_switch_callback(speaker_idle_callback);
 
-    ESP_LOGI(SPP_TAG, "Device initialized, waiting for connection...");
 }

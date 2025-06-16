@@ -129,6 +129,7 @@ void speaker_start()
 }
 
 void speaker_stop()
+
 {
     if (!speaker_active) return;
 
@@ -148,5 +149,5 @@ void speaker_stop()
     buffer_tail = 0;
 
     speaker_active = false;
-    ESP_LOGI(TAG, "Speaker stopped");
+    ESP_LOGI(TAG, "Parlante detenido");
 }
