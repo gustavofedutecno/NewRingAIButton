@@ -6,6 +6,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+//Parámetros del parlante
 #define SAMPLE_RATE 8000
 #define TIMER_INTERVAL_US (1000000 / SAMPLE_RATE)
 #define AUDIO_BUFFER_SIZE 8192
@@ -16,6 +17,7 @@
 static dac_oneshot_handle_t dac_handle = NULL;
 static esp_timer_handle_t audio_timer = NULL;
 
+//Parámetros del buffer de reproducción
 static uint8_t audio_buffer[AUDIO_BUFFER_SIZE];
 static volatile int buffer_head = 0;
 static volatile int buffer_tail = 0;
@@ -62,22 +64,27 @@ static int buffer_occupancy() {
         return AUDIO_BUFFER_SIZE - buffer_tail + buffer_head;
 }
 
+//Callback del timer de audio
 static void audio_timer_callback(void *arg)
 {
     uint8_t sample;
 
     if (!playback_started) {
         if (buffer_occupancy() >= MIN_BUFFER_TO_START) {
+            //Se activa la reproducción si el buffer está minimamente lleno
             playback_started = true;
         } else {
-            dac_oneshot_output_voltage(dac_handle, 0x80);
+            dac_oneshot_output_voltage(dac_handle, 0x80); //Silencio
             return;
         }
     }
 
+    //Si la lectura es no vacía
     if (buffer_read(&sample)) {
+        //Se envía el valor del sample al DAC
         dac_oneshot_output_voltage(dac_handle, sample);
     } else {
+        //Se envía silencio
         playback_started = false;
         dac_oneshot_output_voltage(dac_handle, 0x80);
 
@@ -90,6 +97,7 @@ static void audio_timer_callback(void *arg)
 void speaker_spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
 {
     if (event == ESP_SPP_DATA_IND_EVT) {
+        //Se escriben los datos leídos desde el servidor hasta el buffer
         for (int i = 0; i < param->data_ind.len; i++) {
             buffer_write(param->data_ind.data[i]);
         }
@@ -102,6 +110,7 @@ void speaker_start()
 
     if (speaker_active) return;
 
+    //Se define el puerto de salida del DAC (pin 25)
     dac_oneshot_config_t dac_cfg = {
         .chan_id = DAC_CHAN_0, 
     };
@@ -112,6 +121,7 @@ void speaker_start()
         .name = "audio_timer"
     };
 
+    //Se inicia el timer cada 125[ms] para la reproducción de audio en 8[kHz]
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &audio_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(audio_timer, TIMER_INTERVAL_US));
 
@@ -128,6 +138,7 @@ void speaker_stop()
         return;
     }
 
+    //Se elimina el timer y el periférico DAC
     if (audio_timer) {
         esp_timer_stop(audio_timer);
         esp_timer_delete(audio_timer);
