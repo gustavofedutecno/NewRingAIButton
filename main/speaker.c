@@ -6,7 +6,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-
 #define SAMPLE_RATE 8000
 #define TIMER_INTERVAL_US (1000000 / SAMPLE_RATE)
 #define AUDIO_BUFFER_SIZE 8192
@@ -25,15 +24,12 @@ static bool playback_started = false;
 static TaskHandle_t speaker_task_handle = NULL;
 static bool speaker_active = false;
 
-// Event handler externo
 static speaker_event_cb_t mode_switch_callback = NULL;
 
 void speaker_register_mode_switch_callback(speaker_event_cb_t cb)
 {
     mode_switch_callback = cb;
 }
-
-//================== BUFFER CIRCULAR ======================
 
 static inline bool buffer_is_empty() {
     return buffer_head == buffer_tail;
@@ -66,8 +62,6 @@ static int buffer_occupancy() {
         return AUDIO_BUFFER_SIZE - buffer_tail + buffer_head;
 }
 
-//================== TIMER CALLBACK ======================
-
 static void audio_timer_callback(void *arg)
 {
     uint8_t sample;
@@ -87,14 +81,11 @@ static void audio_timer_callback(void *arg)
         playback_started = false;
         dac_oneshot_output_voltage(dac_handle, 0x80);
 
-        // Notificar FSM para cambiar a modo micrófono
         if (mode_switch_callback) {
-            mode_switch_callback();  // Se define externamente en FSM
+            mode_switch_callback();
         }
     }
 }
-
-//================== CALLBACK SPP ======================
 
 void speaker_spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
 {
@@ -105,14 +96,14 @@ void speaker_spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
     }
 }
 
-//================== INIT / DEINIT ======================
-
 void speaker_start()
 {
+    ESP_LOGI(TAG, "Iniciando el parlante");
+
     if (speaker_active) return;
 
     dac_oneshot_config_t dac_cfg = {
-        .chan_id = DAC_CHAN_0,
+        .chan_id = DAC_CHAN_0, 
     };
     ESP_ERROR_CHECK(dac_oneshot_new_channel(&dac_cfg, &dac_handle));
 
@@ -125,13 +116,17 @@ void speaker_start()
     ESP_ERROR_CHECK(esp_timer_start_periodic(audio_timer, TIMER_INTERVAL_US));
 
     speaker_active = true;
-    ESP_LOGI(TAG, "PARLANTE INICIADO");
+    ESP_LOGI(TAG, "Parlante iniciado");
 }
 
 void speaker_stop()
-
 {
-    if (!speaker_active) return;
+    ESP_LOGI(TAG, "Iniciando detención del parlante");
+
+    if (!speaker_active) {
+        ESP_LOGI(TAG, "Parlante no activo y detenido");
+        return;
+    }
 
     if (audio_timer) {
         esp_timer_stop(audio_timer);

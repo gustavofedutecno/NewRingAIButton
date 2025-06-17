@@ -113,13 +113,11 @@ void bluetooth_sender_task(void *arg)
             size_t bytes = circular_buffer_read(pending_buffer, sizeof(pending_buffer));
             if (bytes > 0)
             {
-                ESP_LOGI(SPP_TAG, "BYTES>0");
                 pending_len = bytes;
                 spp_can_send = false;
                 esp_err_t err = esp_spp_write(spp_client_handle, pending_len, pending_buffer);
                 if (err != ESP_OK)
                 {
-                    ESP_LOGI(SPP_TAG, "SPP CAN SEND");
                     spp_can_send = true;
                 }
             }
@@ -150,7 +148,6 @@ void i2s_reader_task(void *arg)
 
             if (recording)
             {
-                ESP_LOGI(SPP_TAG, "CIRCULAR BUFFER WRITE");
                 circular_buffer_write((uint8_t *)processed_samples, samples_read * sizeof(int16_t));
             }
         }
@@ -163,8 +160,6 @@ void mic_manager_task(void *arg)
     {
         if (micflag)
         {
-
-            printf("micflag %d y recording %d \n", micflag, recording);
 
             if (!recording)
             {
@@ -189,70 +184,103 @@ void mic_manager_task(void *arg)
 
 void button_task(void *arg)
 {
+    bool last_state = false;
+
     while (1)
     {
         bool current_state = gpio_get_level(BUTTON_GPIO);
 
-        mic_set_recording(current_state);
+        if (current_state != last_state)
+        {
+            micflag = true;
+            last_state = current_state;
+        }
 
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
 void mic_start()
 {
+    ESP_LOGI(SPP_TAG, "Reanudando o iniciando tareas del micrófono");
+
     gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
     gpio_set_direction(BUTTON_GPIO, GPIO_MODE_INPUT);
     mic_set_recording(false);
 
-    i2s_config_init();
+    // Solo instalar I2S si no está instalado
+    static bool i2s_initialized = false;
+    if (!i2s_initialized)
+    {
+        i2s_config_init();
+        i2s_initialized = true;
+    }
 
-    xTaskCreate(button_task, "button_task", 4096, NULL, 5, &button_task_handle);
-    xTaskCreate(i2s_reader_task, "i2s_reader_task", 8192, NULL, 6, &i2s_task_handle);
-    xTaskCreate(bluetooth_sender_task, "bluetooth_sender_task", 4096, NULL, 6, &sender_task_handle);
-    xTaskCreate(mic_manager_task, "mic_manager_task", 4096, NULL, 6, &mic_manager_task_handle);
+    // Crear tareas solo si aún no han sido creadas
+    if (button_task_handle == NULL){
+        xTaskCreate(button_task, "button_task", 4096, NULL, 5, &button_task_handle);
+    }
+    else
+    {
+        vTaskResume(button_task_handle);
+    }
 
-    ESP_LOGI(SPP_TAG, "MIC STARTED");
+    if (i2s_task_handle == NULL){
+        xTaskCreate(i2s_reader_task, "i2s_reader_task", 8192, NULL, 6, &i2s_task_handle);
+    }
+    else
+    {
+        vTaskResume(i2s_task_handle);
+    }
+
+    if (sender_task_handle == NULL)
+    {
+        xTaskCreate(bluetooth_sender_task, "bluetooth_sender_task", 4096, NULL, 6, &sender_task_handle);
+    }
+    else
+    {
+        vTaskResume(sender_task_handle);
+    }
+
+    if (mic_manager_task_handle == NULL)
+    {
+        xTaskCreate(mic_manager_task, "mic_manager_task", 4096, NULL, 6, &mic_manager_task_handle);
+    }
+    else
+    {
+        vTaskResume(mic_manager_task_handle);
+    }
+
+    ESP_LOGI(SPP_TAG, "Micrófono en ejecución");
 }
 
 void mic_stop()
 {
-    ESP_LOGI(SPP_TAG, "MICROFONO DETENIDO INICIAL");
+    ESP_LOGI(SPP_TAG, "Iniciando detención de micrófono");
 
     if (i2s_task_handle)
     {
-        vTaskDelete(i2s_task_handle);
-        i2s_task_handle = NULL;
+        vTaskSuspend(i2s_task_handle);
     }
 
     if (button_task_handle)
     {
-        vTaskDelete(button_task_handle);
-        button_task_handle = NULL;
+        vTaskSuspend(button_task_handle);
     }
 
     if (sender_task_handle)
     {
-        vTaskDelete(sender_task_handle);
-        sender_task_handle = NULL;
+        vTaskSuspend(sender_task_handle);
     }
 
-    if (mic_manager_task_handle)
-    {
-        vTaskDelete(mic_manager_task_handle);
-        mic_manager_task_handle = NULL;
-    }
-
-    i2s_driver_uninstall(I2S_PORT);
-
-    recording = false;
+    mic_set_recording(false);
     spp_can_send = true;
     pending_len = 0;
     write_index = 0;
     read_index = 0;
     data_available = 0;
 
-    ESP_LOGI(SPP_TAG, "MICROFONO DETENIDO FINAL");
+    ESP_LOGI(SPP_TAG, "Detención del micrófono finalizada");
 }
 
 void mic_spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
@@ -269,6 +297,7 @@ void mic_spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
         break;
 
     case ESP_SPP_CONG_EVT:
+        ESP_LOGI(SPP_TAG,"Servidor congestionado");
         spp_can_send = !param->cong.cong;
         break;
 

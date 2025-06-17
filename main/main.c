@@ -23,29 +23,26 @@ static system_mode_t current_mode = MODE_WAITING;
 static uint32_t client_handle = 0;
 static bool spp_ready = false;
 
-// ===================== CAMBIO DE MODO =========================
-
 void set_mode(system_mode_t new_mode)
 {
+
     if (current_mode == new_mode)
         return;
-    
-    printf("Nuevo modo: %u", new_mode);
 
     switch (new_mode)
     {
     case MODE_MIC:
-        ESP_LOGI(SPP_TAG, "Switched to MIC mode");
-        speaker_stop(); // Asegura detención speaker
-        mic_start();    // Nuevo nombre refactorizado
+        ESP_LOGI(SPP_TAG, "Modo micrófono activado");
+        speaker_stop(); 
+        mic_start(); 
         break;
 
     case MODE_SPEAKER:
-        ESP_LOGI(SPP_TAG, "Switched to SPEAKER mode");
-        mic_stop();      // Detiene tareas de micrófono
-        ESP_LOGI(SPP_TAG, "Mic Stopped");
-        speaker_start(); // Inicializa speaker
-        ESP_LOGI(SPP_TAG, "Mode Speaker Ready");
+        ESP_LOGI(SPP_TAG, "case MODE_SPEAKER");
+        mic_stop();
+        ESP_LOGI(SPP_TAG, "Microfono detenido");
+        speaker_start();
+        ESP_LOGI(SPP_TAG, "Modo parlante listo");
         break;
 
     default:
@@ -88,6 +85,10 @@ void spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
         set_mode(MODE_MIC); // Se establece el modo MIC por defecto
         break;
 
+    case ESP_SPP_START_EVT:
+    ESP_LOGI(SPP_TAG, "Servidor Iniciado");
+        break;
+
     case ESP_SPP_WRITE_EVT:
     case ESP_SPP_CONG_EVT:
         if (current_mode == MODE_MIC)
@@ -116,8 +117,6 @@ void spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
         break;
     }
 }
-
-// ===================== MAIN =========================
 
 void app_main(void)
 {
