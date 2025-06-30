@@ -8,7 +8,7 @@
 
 #define SPP_TAG "MIC"
 
-//Definicón de los parámetros del micrófono y puerto I2S
+//Definición de los parámetros del micrófono y puerto I2S
 #define I2S_PORT I2S_NUM_0 //Pin 25 en ESP32-WROOM-32D
 #define I2S_WS GPIO_NUM_2
 #define I2S_SCK GPIO_NUM_0
@@ -81,7 +81,7 @@ void i2s_config_init()
         .data_out_num = I2S_PIN_NO_CHANGE,
         .data_in_num = I2S_SD};
 
-    //Instalación del perto I2S con la configuración anterior
+    //Instalación del puerto I2S con la configuración anterior
     ESP_ERROR_CHECK(i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL));
     ESP_ERROR_CHECK(i2s_set_pin(I2S_PORT, &pin_config));
     i2s_zero_dma_buffer(I2S_PORT);
@@ -129,10 +129,16 @@ void bluetooth_sender_task(void *arg)
                 pending_len = bytes;
                 spp_can_send = false;
                 esp_err_t err = esp_spp_write(spp_client_handle, pending_len, pending_buffer);
-                if (err != ESP_OK)
+                if (err == ESP_OK)
                 {
-                    //Si la lectura es exitosa, se activa la flag de envío
+                    //Si la escritura es exitosa, se activa la flag de envío
                     spp_can_send = true;
+                    pending_len = 0;
+                }
+
+                else
+                {
+                    ESP_LOGW(SPP_TAG, "Error en escritura: %s", esp_err_to_name(err));
                 }
             }
         }
@@ -159,7 +165,7 @@ void i2s_reader_task(void *arg)
 
             for (size_t i = 0; i < samples_read; i++)
             {
-                //Los datos de audio vienen con poco volumen
+                //Los datos de audio vienen con poco volumen, se aumenta la ganancia a través de bitshift
                 processed_samples[i] = samples_32bit[i] >> ganancia;
             }
 
@@ -179,7 +185,6 @@ void mic_manager_task(void *arg)
 {
     while (1)
     {
-        //Si se activa la bandera micrófono (no bloqueante para evitar conflictos de tareas en FreeRTOS)
         if (micflag)
         {
             if (!recording)
@@ -214,7 +219,7 @@ void button_task(void *arg)
 
         if (current_state != last_state)
         {
-            //Se detecta la preción de botón
+            //Se detecta la presión de botón
             micflag = true;
             last_state = current_state;
         }
@@ -311,6 +316,11 @@ void mic_stop()
         vTaskSuspend(sender_task_handle);
     }
 
+    esp_err_t err = i2s_driver_uninstall(I2S_PORT);
+    if (err != ESP_OK) {
+        ESP_LOGW(SPP_TAG, "No se pudo desinstalar el driver I2S: %s", esp_err_to_name(err));
+    }
+
     mic_set_recording(false);
     spp_can_send = true;
     pending_len = 0;
@@ -326,12 +336,6 @@ void mic_spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
 {
     switch (event)
     {
-    case ESP_SPP_WRITE_EVT:
-        //Operación de escritura al servidor
-        spp_can_send = true;
-        pending_len = 0;
-        break;
-
     case ESP_SPP_SRV_OPEN_EVT:
         //Conexión de un cliente al servidor
         spp_client_handle = param->srv_open.handle;
@@ -341,6 +345,11 @@ void mic_spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
         //Congestión del envío de datos al sevidor
         ESP_LOGI(SPP_TAG,"Servidor congestionado");
         spp_can_send = !param->cong.cong;
+        break;
+
+
+    case ESP_SPP_CL_INIT_EVT:
+        ESP_LOGI(SPP_TAG, "SPP client initialized");
         break;
 
     default:

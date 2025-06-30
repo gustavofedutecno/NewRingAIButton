@@ -100,10 +100,16 @@ void spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
         {
             mic_spp_callback(event, param);
         }
+
+        if (current_mode == MODE_SPEAKER)
+        {
+            ESP_LOGI(SPP_TAG,"Congestión en el parlante");
+        }
+        
         break;
 
     case ESP_SPP_DATA_IND_EVT:
-        //Receipción de datos sólamente en modo parlante
+        //Recepción de datos sólamente en modo parlante
         if (current_mode == MODE_SPEAKER)
         {
             speaker_spp_callback(event, param);
@@ -117,6 +123,10 @@ void spp_callback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param)
         client_handle = 0;
         mic_stop();       
         set_mode(MODE_WAITING);
+        break;
+
+    case ESP_SPP_WRITE_EVT:
+        //ESP_LOGI(SPP_TAG,"Evento escritura desde el server");
         break;
 
     default:

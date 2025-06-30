@@ -10,6 +10,7 @@
     "idf.toolsPathWin": "C:\\Users\\EDUTECNO\\.espressif",
     "idf.flashType": "UART",
     "files.associations": {
-        "esp_spp_api.h": "c"
+        "esp_spp_api.h": "c",
+        "speaker.h": "c"
     }
 }
